@@ -840,7 +840,7 @@ def director_review(story, scenes, stills, char_ref, aspect, backend):
 
 
 def build(story_path: Path, outdir: Path, dry=False, director=False, producer=False,
-          stop_after=None):
+          stop_after=None, captions=True):
     story = json.loads(story_path.read_text(encoding="utf-8"))
     errs = validate_story(story)
     if errs:
@@ -952,7 +952,8 @@ def build(story_path: Path, outdir: Path, dry=False, director=False, producer=Fa
         print(f"\nDRY RUN complete. total runtime {total:.1f}s -> {outdir}")
         return
 
-    assemble(story, scenes, clips, voice_files, music, outdir, total)
+    assemble(story, scenes, clips, voice_files, music, outdir, total,
+             burn_captions=captions)
     print(f"\ndone: {outdir / (slug(title) + '.mp4')}")
     print(f"credits left: {backend.credits()}")
     if producer:
@@ -985,8 +986,21 @@ def write_srt(path, captions):
     path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
 
 
+# burned-in caption look (libass force_style): white, dark outline, bottom
+CAPTION_STYLE = ("FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,"
+                 "OutlineColour=&H00141414,Outline=2,Shadow=0,"
+                 "Alignment=2,MarginV=30")
+
+
+def subtitles_available(ff):
+    p = subprocess.run([ff, "-hide_banner", "-filters"],
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    return "subtitles" in p.stdout
+
+
 def assemble(story, scenes, clips, voice_files, music, outdir, total,
-             music_vol=MUSIC_VOL):
+             music_vol=MUSIC_VOL, burn_captions=True):
     ff = get_ffmpeg()
     n = len(clips)
     boundaries = [0.0]
@@ -1006,7 +1020,7 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
                    f"pad={cw}:{chh}:(ow-iw)/2:(oh-ih)/2,"
                    f"setsar=1,fps=24[vin{i}];")
         parts.append(f"[vin{i}]")
-    fgraph += f"{''.join(parts)}concat=n={n}:v=1:a=0[vv];[vv]setsar=1[vout];"
+    fgraph += f"{''.join(parts)}concat=n={n}:v=1:a=0[vv];"
 
     # voices: per-line loudnorm, fit-to-scene atempo, timed delays
     chains, mix_ins, idx = [], [], n
@@ -1064,20 +1078,37 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
 
     inputs = []
     for c in clips:
-        inputs += ["-i", str(c)]
+        inputs += ["-i", str(Path(c).resolve())]
     for scene_files in voice_files:
         for raw, trm in scene_files:
-            inputs += ["-i", str(trm)]
-    inputs += ["-i", str(music)]
+            inputs += ["-i", str(Path(trm).resolve())]
+    inputs += ["-i", str(Path(music).resolve())]
 
-    out = outdir / (slug(story.get("title", "film")) + ".mp4")
+    out = Path(outdir).resolve() / (slug(story.get("title", "film")) + ".mp4")
+    srt = out.with_suffix(".srt")
+    write_srt(srt, captions)   # must exist before the encode when burning
+
+    # close the video chain: optionally burn captions over the concat result.
+    # the SRT is referenced by relative name with cwd=outdir (drive letters
+    # and backslashes break the filter's option parser).
+    if burn_captions and subtitles_available(ff):
+        fgraph += (f";[vv]setsar=1,subtitles={srt.name}:"
+                   f"force_style='{CAPTION_STYLE}'[vout];")
+        burned = True
+    else:
+        if burn_captions:
+            print("  note: ffmpeg lacks libass - captions stay SRT-only")
+        fgraph += ";[vv]setsar=1[vout];"
+        burned = False
+
     cmd = ([ff, "-nostdin", "-y"] + inputs + ["-filter_complex", fgraph,
            "-map", "[vout]", "-map", "[aout]",
            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
            "-t", f"{total:.2f}", str(out)])
     p = subprocess.run(cmd, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace",
+                       cwd=str(outdir))
     if p.returncode != 0 or not out.exists():
         fail(f"ffmpeg failed:\n{p.stderr[-3000:]}")
     # loudness sanity check
@@ -1085,9 +1116,8 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
             capture=True)
     mx = re.search(r"max_volume: ([-\d.]+)", v.stderr)
     print(f"  mix peak {mx.group(1)} dB (target <= -1.0)" if mx else "  mix checked")
-    srt = out.with_suffix(".srt")
-    write_srt(srt, captions)
-    print(f"  captions: {srt.name}")
+    print(f"  captions: {srt.name}"
+          + (" (burned in)" if burned else " (sidecar only)"))
     return out
 
 
@@ -1357,6 +1387,9 @@ def main():
                         "storyboard stills, then stop with review instructions "
                         "(re-run the same command to continue; also works for "
                         "agents without an interactive terminal)")
+    b.add_argument("--no-captions", action="store_true",
+                   help="write the .srt sidecar but do not burn captions into "
+                        "the video")
 
     c = sub.add_parser("check", help="no-credit pre-flight: validate the "
                                      "story, speech-fit report, cost quote")
@@ -1392,7 +1425,7 @@ def main():
     else:
         outdir = args.outdir or Path(args.story.stem + "-film")
         build(args.story, outdir, args.dry_run, args.director, args.producer,
-              stop_after=args.stop_after)
+              stop_after=args.stop_after, captions=not args.no_captions)
 
 
 if __name__ == "__main__":

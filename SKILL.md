@@ -58,8 +58,10 @@ Linux. No GPU, no accounts beyond the API keys the user supplies.
    credits are spent.
 
 Every build also writes `<film>.srt` next to the MP4 - a caption sidecar
-with each line's exact placement on the film timeline (upload it with the
-video, or style it on the platform).
+with each line's exact placement on the film timeline - and burns the
+captions into the video by default (white with dark outline, bottom third;
+disable with `build --no-captions`, or restyle via `CAPTION_STYLE` in
+studio.py).
 
 ## Hard-won model facts (don't re-derive)
 
