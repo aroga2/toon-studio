@@ -41,10 +41,21 @@ Linux. No GPU, no accounts beyond the API keys the user supplies.
 3. **Direct (optional, recommended).** Add `--director` to pause after the
    storyboard stills: view each image, then accept, regenerate with a note
    (`r wider shot`), or swap in your own image (`s path.png`) before animation
-   credits are spent.
+   credits are spent. In an agent without interactive stdin, use the folder
+   protocol instead: `build --stop-after stills`, review/overwrite
+   `sceneN.png` in the outdir (or `python studio.py regen story.json
+   --outdir DIR <scene#> "director's note"`), then re-run the same build.
 4. **Producer (optional).** Add `--producer` for a post-assembly fix loop:
    `r 2` re-renders scene 2's clip, `v 2 1` re-voices line 1 of scene 2,
    `m 0.2` re-mixes with a louder music bed, `a` accepts.
+5. **Check first (no credits).** `python studio.py check story.json`
+   validates the schema, reports speech fit per scene (estimated speech
+   seconds vs. the scene window), and quotes the KIE credit cost of the
+   missing stages plus the current balance - approve before spending.
+6. **Approve the cast (cheap).** `python studio.py preview story.json`
+   renders the first line of each distinct voice to
+   `preview_<speaker>.mp3` so the user can approve voices before any video
+   credits are spent.
 
 ## Hard-won model facts (don't re-derive)
 

@@ -24,7 +24,15 @@ python studio.py build story.json --outdir my-film --director
 `--director` pauses after the storyboard stills so you can approve, regenerate
 (`r wider shot`) or swap (`s path/to.png`) each image before animation credits
 are spent. `--producer` adds a post-assembly fix loop (re-render one clip,
-re-voice one line, re-mix levels).
+re-voice one line, re-mix levels). Agents without a terminal get the same
+workflow via the folder protocol: `build --stop-after stills`, review or
+overwrite the stills, optionally `studio.py regen story.json <scene#> "note"`,
+then re-run the build.
+
+Two no-credit guardrails: `studio.py check story.json` (schema validation,
+speech-fit report, cost quote with live balance) and
+`studio.py preview story.json` (render one sample line per voice so the cast
+is approved before video credits are spent).
 
 Every stage is cached in the output dir — re-running only generates what's
 missing, so iterating on one scene costs one render, not a whole film.

@@ -473,11 +473,10 @@ class KIEBackend:
             except SystemExit:
                 if attempt == 0:
                     print("  retry with simplified motion prompt")
-                    prompt = _simplify(prompt)
-                    if model.startswith("hailuo/"):
-                        inp["prompt"] = prompt
-                    else:
-                        inp["prompt"] = prompt
+                    # keep the hard rules - a bare simplified prompt can come
+                    # back with lip movement or its own soundtrack
+                    prompt = _simplify(prompt) + ". " + NO_SPEAK + " " + AUDIO_FX
+                    inp["prompt"] = prompt
                 else:
                     raise
 
@@ -648,36 +647,92 @@ def new_story(idea, n_scenes, out_path: Path, model=None):
                    for _ in range(n_scenes)],
         "music_prompt": DEFAULT_MUSIC,
     }
-    key = os.environ.get("OPENAI_API_KEY") or os.environ.get("KIE_API_KEY")
+    key = os.environ.get("OPENAI_API_KEY")
     if key:
         base = os.environ.get("OPENAI_BASE_URL", "https://api.moonshot.ai/v1")
         model = model or os.environ.get("TOON_MODEL", "kimi-k2-0905-preview")
-        req = {"model": model, "temperature": 0.8,
-               "messages": [{"role": "system", "content": LLM_SYS},
-                            {"role": "user", "content":
-                             f"Write a {n_scenes}-scene cartoon film script for this idea: {idea}"}]}
-        r = urllib.request.Request(
-            base.rstrip("/") + "/chat/completions",
-            data=json.dumps(req).encode(),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
-        with urllib.request.urlopen(r, timeout=120) as resp:
-            data = json.loads(resp.read())
-        text = data["choices"][0]["message"]["content"]
-        story, _ = json.JSONDecoder().raw_decode(text[text.find("{"):])
-        story.setdefault("style", DEFAULT_STYLE)
-        story.setdefault("aspect_ratio", "16:9")
-        story.setdefault("video_resolution", "720p")
-        story.setdefault("music_prompt", DEFAULT_MUSIC)
-        tpl = story
-        print(f"story written by {model}")
+        try:
+            req = {"model": model, "temperature": 0.8,
+                   "messages": [{"role": "system", "content": LLM_SYS},
+                                {"role": "user", "content":
+                                 f"Write a {n_scenes}-scene cartoon film script "
+                                 f"for this idea: {idea}"}]}
+            r = urllib.request.Request(
+                base.rstrip("/") + "/chat/completions",
+                data=json.dumps(req).encode(),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {key}"})
+            with urllib.request.urlopen(r, timeout=120) as resp:
+                data = json.loads(resp.read())
+            text = data["choices"][0]["message"]["content"]
+            story, _ = json.JSONDecoder().raw_decode(text[text.find("{"):])
+            story.setdefault("style", DEFAULT_STYLE)
+            story.setdefault("aspect_ratio", "16:9")
+            story.setdefault("video_resolution", "720p")
+            story.setdefault("music_prompt", DEFAULT_MUSIC)
+            tpl = story
+            print(f"story written by {model}")
+        except Exception as e:
+            print(f"LLM story drafting failed ({e}); writing a template "
+                  f"to edit by hand instead")
     else:
-        print("no OPENAI_API_KEY/KIE_API_KEY found - writing a template to edit by hand")
+        print("no OPENAI_API_KEY found - writing a template to edit by hand "
+              "(set OPENAI_API_KEY + OPENAI_BASE_URL to auto-draft scripts)")
     tpl["_idea"] = idea
     out_path.write_text(json.dumps(tpl, indent=2, ensure_ascii=False))
     print(f"story file: {out_path}")
 
 
 # ---------------------------------------------------------------- pipeline
+
+def validate_story(story):
+    """Collect human-readable schema errors. Returns a list (empty = OK)."""
+    errs = []
+    if not isinstance(story, dict):
+        return ["story file must contain a JSON object"]
+    for k in ("title",):
+        if not story.get(k):
+            errs.append(f"missing '{k}'")
+    chars = story.get("characters")
+    if chars is None:
+        chars = []
+    if not isinstance(chars, list):
+        errs.append("'characters' must be a list")
+        chars = []
+    names = set()
+    for i, ch in enumerate(chars, 1):
+        if not isinstance(ch, dict) or not ch.get("name"):
+            errs.append(f"character #{i}: missing 'name'")
+            continue
+        names.add(ch["name"])
+        if not ch.get("design"):
+            errs.append(f"character '{ch['name']}': missing 'design'")
+    scenes = story.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        errs.append("'scenes' must be a non-empty list")
+        scenes = []
+    for i, sc in enumerate(scenes, 1):
+        where = f"scene {i}"
+        if not isinstance(sc, dict) or not sc.get("description"):
+            errs.append(f"{where}: missing 'description'")
+            continue
+        dur = sc.get("duration", 6)
+        if not isinstance(dur, (int, float)) or not (4 <= float(dur) <= 15):
+            errs.append(f"{where}: 'duration' must be a number 4-15 "
+                       f"(got {dur!r})")
+        for who in sc.get("characters", []):
+            if who not in names:
+                errs.append(f"{where}: unknown character '{who}' "
+                            f"(not in 'characters')")
+        for j, ln in enumerate(sc.get("lines", []), 1):
+            if not isinstance(ln, dict) or not ln.get("text"):
+                errs.append(f"{where} line {j}: missing 'text'")
+    backends = story.get("backends", {})
+    if backends and not isinstance(backends, dict):
+        errs.append("'backends' must be an object like "
+                    "{\"image\": \"kie\", \"voice\": \"elevenlabs\"}")
+    return errs
+
 
 class Stage:
     def __init__(self, outdir: Path, backend, dry=False):
@@ -730,6 +785,11 @@ def still_params(story, scene, char_ref, aspect, extra=""):
                         if c["name"] in scene.get("characters", []))
     who = (f"Featuring character(s): {cast}. Exact designs: {designs}. " if cast else "")
     img = char_ref.get(scene.get("characters", [None])[0]) if scene.get("characters") else None
+    if img is not None:
+        extra = ("Match the reference character's face, hairstyle and identity "
+                 "exactly, but do NOT copy the outfit from the reference image "
+                 "- dress the character exactly as described in this scene. "
+                 + extra)
     params = dict(
         prompt=(f"Scene from an animated cartoon film, {style}. {who}"
                 f"{scene['description']}. {extra} Cinematic composition, {style} "
@@ -737,10 +797,6 @@ def still_params(story, scene, char_ref, aspect, extra=""):
         aspect=aspect)
     if img is not None:
         params["ref"] = str(img)
-        extra = ("Match the reference character's face, hairstyle and identity "
-                 "exactly, but do NOT copy the outfit from the reference image "
-                 "- dress the character exactly as described in this scene. "
-                 + extra)
     return params
 
 
@@ -783,8 +839,13 @@ def director_review(story, scenes, stills, char_ref, aspect, backend):
     return stills
 
 
-def build(story_path: Path, outdir: Path, dry=False, director=False, producer=False):
+def build(story_path: Path, outdir: Path, dry=False, director=False, producer=False,
+          stop_after=None):
     story = json.loads(story_path.read_text(encoding="utf-8"))
+    errs = validate_story(story)
+    if errs:
+        fail("story.json has problems - fix these first (no credits spent):\n  "
+             + "\n  ".join(errs))
     title = story.get("title", "untitled")
     style = story.get("style", DEFAULT_STYLE)
     aspect = story.get("aspect_ratio", "16:9")
@@ -836,6 +897,20 @@ def build(story_path: Path, outdir: Path, dry=False, director=False, producer=Fa
 
     if director and not dry:
         stills = director_review(story, scenes, stills, char_ref, aspect, backend)
+
+    if stop_after == "stills":
+        print(f"\nSTOPPED FOR REVIEW (folder protocol):")
+        print(f"  storyboard stills are in: {outdir}")
+        for i, s in enumerate(stills, 1):
+            print(f"    scene {i}: {s.name}")
+        print("  next steps:")
+        print(f"    - view each sceneN.png and either keep it, overwrite it with")
+        print(f"      your own image (same file name), or:")
+        print(f"    - regenerate one: python studio.py regen {story_path} "
+              f"--outdir {outdir} <scene#> \"director's note\"")
+        print(f"    - then re-run this same build command to continue (finished")
+        print(f"      stages are reused; animation is not started until you do).")
+        return
 
     print("== stage 3/5: animation ==")
     def video_for(idx, pair):
@@ -899,9 +974,20 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
     for c in clips:
         boundaries.append(boundaries[-1] + probe_duration(c))
 
-    # video: concat + normalize
-    parts = [f"[{i}:v]" for i in range(n)]
-    fgraph = f"{''.join(parts)}concat=n={n}:v=1:a=0[vv];[vv]fps=24,setsar=1[vout];"
+    # video: normalize every clip to the story canvas (a swapped-in still or
+    # a differently-sized model output can't break the concat), then concat
+    aspect = story.get("aspect_ratio", "16:9")
+    canvas = {"16:9": (1280, 720), "9:16": (720, 1280),
+              "1:1": (960, 960)}.get(aspect, (1280, 720))
+    cw, chh = canvas
+    fgraph, parts = "", []
+    for i in range(n):
+        fgraph += (f"[{i}:v]scale={cw}:{chh}:"
+                   f"force_original_aspect_ratio=decrease,"
+                   f"pad={cw}:{chh}:(ow-iw)/2:(oh-ih)/2,"
+                   f"setsar=1,fps=24[vin{i}];")
+        parts.append(f"[vin{i}]")
+    fgraph += f"{''.join(parts)}concat=n={n}:v=1:a=0[vv];[vv]setsar=1[vout];"
 
     # voices: per-line loudnorm, fit-to-scene atempo, timed delays
     chains, mix_ins, idx = [], [], n
@@ -931,7 +1017,6 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
             t += dur / eff + LINE_GAP
             idx += 1
 
-    total_ms = int(round(total * 1000))
     fgraph += ";".join(chains) + ";"
     fgraph += (f"{''.join(mix_ins)}amix=inputs={len(mix_ins)}:normalize=0,"
                f"apad=whole_dur={total:.2f},volume=1.1,asplit=2[voice][sc];")
@@ -943,7 +1028,7 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
     # (seedance/hailuo) are skipped.
     amb_ins = []
     for i, c in enumerate(clips):
-        if not has_audio(c):
+        if AMB_VOL <= 0 or not has_audio(c):
             continue
         delay_ms = int(round(boundaries[i] * 1000))
         fgraph += (f"[{i}:a]aresample=44100,atrim=0:{boundaries[i + 1] - boundaries[i]:.2f},"
@@ -1052,6 +1137,152 @@ def producer_pass(story, scenes, stills, clips, voice_files, music, outdir,
     return film
 
 
+# ---------------------------------------------------------------- review commands
+
+# measured per-unit KIE costs (credits) - used for the pre-build quote; keep in
+# sync with SKILL.md. Keyed by substring of the configured model id.
+IMAGE_RATES = (("qwen3", 6.4), ("z-image", 0.8), ("nano-banana-pro", 18),
+               ("nano-banana-2", 6), ("gpt-image", 8))
+VIDEO_RATES = (("minimax-h3", 48), ("hailuo", 45), ("seedance-2-fast", 148.8),
+               ("seedance", 140), ("veo", 300))
+MUSIC_RATE = 24.0           # Suno song via KIE
+WORDS_PER_SEC = 3.0         # TTS speech estimate for the fit report
+
+
+def _rate(table, model, default):
+    m = (model or "").lower()
+    for key, val in table:
+        if key in m:
+            return val
+    return default
+
+
+def cmd_check(story_path: Path):
+    """No-credit pre-flight: schema validation, speech-fit report, cost quote."""
+    story = json.loads(story_path.read_text(encoding="utf-8"))
+    print(f"== check: {story.get('title', 'untitled')} ==")
+    errs = validate_story(story)
+    if errs:
+        print("  PROBLEMS (fix before building - no credits spent):")
+        for e in errs:
+            print(f"    - {e}")
+        sys.exit(1)
+    print("  schema: OK")
+
+    scenes = story["scenes"]
+    # speech fit per scene
+    print("  speech fit (est. ~%.1f words/sec):" % WORDS_PER_SEC)
+    ok = True
+    for i, sc in enumerate(scenes, 1):
+        lines = sc.get("lines", [])
+        words = sum(len(ln["text"].split()) for ln in lines)
+        need = words / WORDS_PER_SEC + LINE_GAP * max(0, len(lines) - 1)
+        avail = float(sc.get("duration", 6)) - LINE_OFFSET - END_PAD
+        flag = ""
+        if need > avail:
+            ok = False
+            flag = f"  <-- TOO LONG by {need - avail:.1f}s (raise 'duration' or trim text)"
+        print(f"    scene {i}: {words:2d} words, ~{need:.1f}s speech in "
+              f"{avail:.1f}s window{flag}")
+    if not ok:
+        print("  NOTE: overfull scenes still build, but speech may spill over "
+              "the scene cut.")
+
+    # cost quote
+    backend = get_backend(story)
+    models = {}
+    if hasattr(backend, "impls") and "kie" in backend.impls:
+        models = backend.impls["kie"].models
+    img_m = models.get("image") or os.environ.get("KIE_IMAGE_MODEL", "?")
+    vid_m = models.get("video") or os.environ.get("KIE_VIDEO_MODEL", "?")
+    mus_m = models.get("music") or os.environ.get("KIE_MUSIC_MODEL", "V4_5")
+    img_r = _rate(IMAGE_RATES, img_m, None)
+    vid_r = _rate(VIDEO_RATES, vid_m, None)
+    n_ref = sum(1 for c in story.get("characters", [])
+                if c.get("photo")) or len(story.get("characters", []))
+    n_stills = len(scenes)
+    n_clips = len(scenes)
+    n_lines = sum(len(s.get("lines", [])) for s in scenes)
+    print("  cost quote (KIE credits):")
+    def row(label, n, rate, unit):
+        if rate is None:
+            print(f"    {label:<24} {n:>3}x  (rate for '{unit}' unknown)")
+            return 0.0
+        print(f"    {label:<24} {n:>3}x ~{rate:g} = {n * rate:.1f}")
+        return n * rate
+    total = row(f"character refs [{img_m}]", n_ref, img_r, img_m)
+    total += row(f"stills [{img_m}]", n_stills, img_r, img_m)
+    total += row(f"clips [{vid_m}]", n_clips, vid_r, vid_m)
+    total += row(f"music [suno {mus_m}]", 1, MUSIC_RATE, mus_m)
+    print(f"    {'TOTAL (missing stages only)':<24}     ~{total:.1f} credits")
+    voice_backend = backend.sel.get("voice") if hasattr(backend, "sel") \
+        else backend.name
+    print(f"    voices: {n_lines} lines via '{voice_backend}' "
+          f"(ElevenLabs plan characters, or KIE credits)")
+    try:
+        print(f"    balance now: {backend.credits()}")
+    except Exception:
+        pass
+
+
+def cmd_preview(story_path: Path, outdir: Path):
+    """Render the first line of each distinct voice so the cast can be
+    approved before any video credits are spent."""
+    story = json.loads(story_path.read_text(encoding="utf-8"))
+    errs = validate_story(story)
+    if errs:
+        fail("story.json has problems:\n  " + "\n  ".join(errs))
+    outdir.mkdir(parents=True, exist_ok=True)
+    backend = get_backend(story)
+    seen = {}
+    for sc in story["scenes"]:
+        for ln in sc.get("lines", []):
+            speaker = ln.get("speaker", "narrator")
+            if speaker in seen:
+                continue
+            ch = next((c for c in story.get("characters", [])
+                       if c["name"] == speaker), None)
+            seen[speaker] = (ln, ch)
+    print(f"== voice previews -> {outdir} ==")
+    for speaker, (ln, ch) in seen.items():
+        voice_desc = ln.get("voice") or (ch and ch.get("voice")) or \
+            "warm narrator voice, clear and expressive"
+        voice_id = ln.get("voice_id") or (ch and ch.get("voice_id"))
+        out = outdir / f"preview_{slug(speaker)}.mp3"
+        print(f"  {out.name}: {speaker} - \"{ln['text'][:60]}\"")
+        backend.voice(out, text=ln["text"], voice_desc=voice_desc,
+                      voice_id=voice_id)
+
+
+def cmd_regen(story_path: Path, outdir: Path, scene_i: int, note: str):
+    """Regenerate one storyboard still with a director's note (folder protocol
+    companion: delete-and-rebuild via the normal stage machinery)."""
+    story = json.loads(story_path.read_text(encoding="utf-8"))
+    errs = validate_story(story)
+    if errs:
+        fail("story.json has problems:\n  " + "\n  ".join(errs))
+    scenes = story["scenes"]
+    if not (1 <= scene_i <= len(scenes)):
+        fail(f"scene number must be 1-{len(scenes)}")
+    outdir = Path(outdir)
+    if not outdir.exists():
+        fail(f"outdir not found: {outdir} - run the build at least to the "
+             f"stills stage first")
+    backend = get_backend(story)
+    char_ref = {}
+    for ch in story.get("characters", []):
+        ref = outdir / f"ref_{ch['name'].lower().replace(' ', '_')}.png"
+        if ref.exists():
+            char_ref[ch["name"]] = ref
+    still = outdir / f"scene{scene_i}.png"
+    params = still_params(story, scenes[scene_i - 1], char_ref,
+                          story.get("aspect_ratio", "16:9"),
+                          extra=(note or "different composition") + ". ")
+    print(f"regenerating scene {scene_i} still ({still.name}) ...")
+    backend.image(still, **params)
+    print(f"done: {still} - view it, then re-run the build to continue.")
+
+
 # ---------------------------------------------------------------- main
 
 def load_dotenv():
@@ -1096,14 +1327,47 @@ def main():
     b.add_argument("--producer", action="store_true",
                    help="after the film is assembled, offer targeted fixes: "
                         "re-render a clip, re-voice a line, or re-mix levels")
+    b.add_argument("--stop-after", choices=("stills",), default=None,
+                   help="folder protocol: render stages up to and including the "
+                        "storyboard stills, then stop with review instructions "
+                        "(re-run the same command to continue; also works for "
+                        "agents without an interactive terminal)")
+
+    c = sub.add_parser("check", help="no-credit pre-flight: validate the "
+                                     "story, speech-fit report, cost quote")
+    c.add_argument("story", type=Path)
+
+    p = sub.add_parser("preview", help="render the first line of each distinct "
+                                       "voice so the cast can be approved "
+                                       "before spending video credits")
+    p.add_argument("story", type=Path)
+    p.add_argument("--outdir", type=Path, default=None,
+                   help="default: ./<story-stem>-film")
+
+    g = sub.add_parser("regen", help="regenerate one storyboard still with a "
+                                     "director's note (folder protocol)")
+    g.add_argument("story", type=Path)
+    g.add_argument("scene", type=int)
+    g.add_argument("note", nargs="?", default="different composition")
+    g.add_argument("--outdir", type=Path, default=None,
+                   help="default: ./<story-stem>-film")
 
     args = ap.parse_args()
     load_dotenv()
     if args.cmd == "new":
         new_story(args.idea, args.scenes, args.out, args.model)
+    elif args.cmd == "check":
+        cmd_check(args.story)
+    elif args.cmd == "preview":
+        cmd_preview(args.story,
+                    args.outdir or Path(args.story.stem + "-film"))
+    elif args.cmd == "regen":
+        cmd_regen(args.story, args.outdir or Path(args.story.stem + "-film"),
+                  args.scene, args.note)
     else:
         outdir = args.outdir or Path(args.story.stem + "-film")
-        build(args.story, outdir, args.dry_run, args.director, args.producer)
+        build(args.story, outdir, args.dry_run, args.director, args.producer,
+              stop_after=args.stop_after)
 
 
 if __name__ == "__main__":
