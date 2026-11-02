@@ -17,3 +17,4 @@ film-*/
 *.mp4
 *.wav
 *.m4a
+!docs/demo.mp4
