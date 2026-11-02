@@ -12,6 +12,16 @@ clips, voiceover and music — with the API keys **you** supply.
 
 Works on Windows, macOS, Linux. No GPU required.
 
+## See it in action
+
+From one `story.json` - this entire film (stills, animation, voices, music,
+captions) rendered by the pipeline:
+
+<video src="https://github.com/aroga2/toon-studio/releases/download/v1.0.0/demo.mp4" controls muted playsinline></video>
+
+(12-second cut of the [MoodCast Eva](examples/moodcast-eva/story.json) example
+film; full version with the `.srt` sidecar is what a build produces.)
+
 ## Quickstart
 
 New here? Start with **[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)** — it
