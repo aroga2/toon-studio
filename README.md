@@ -14,6 +14,10 @@ Works on Windows, macOS, Linux. No GPU required.
 
 ## Quickstart
 
+New here? Start with **[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)** — it
+assumes zero GitHub knowledge, includes a paste-it-to-your-agent setup block,
+and shows the free approve-before-you-spend workflow.
+
 ```bash
 pip install elevenlabs imageio-ffmpeg
 cp .env.example .env        # add your KIE_API_KEY (+ ELEVENLABS_API_KEY)
