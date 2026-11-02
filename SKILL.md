@@ -57,6 +57,10 @@ Linux. No GPU, no accounts beyond the API keys the user supplies.
    `preview_<speaker>.mp3` so the user can approve voices before any video
    credits are spent.
 
+Every build also writes `<film>.srt` next to the MP4 - a caption sidecar
+with each line's exact placement on the film timeline (upload it with the
+video, or style it on the platform).
+
 ## Hard-won model facts (don't re-derive)
 
 - KIE task API: `POST {KIE_BASE_URL}/api/v1/jobs/createTask` with

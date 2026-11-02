@@ -966,6 +966,25 @@ def slug(title):
     return re.sub(r"[^a-z0-9]+", "_", s).strip("_") or "film"
 
 
+def write_srt(path, captions):
+    """captions: list of (start_sec, end_sec, line_dict) -> SRT sidecar."""
+
+    def ts(sec):
+        ms = int(round(sec * 1000))
+        h, ms = divmod(ms, 3600000)
+        m, ms = divmod(ms, 60000)
+        s, ms = divmod(ms, 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    blocks = []
+    for i, (start, end, line) in enumerate(captions, 1):
+        text = line["text"]
+        if line.get("speaker", "narrator") != "narrator":
+            text = f"{line['speaker']}: {text}"
+        blocks.append(f"{i}\n{ts(start)} --> {ts(end)}\n{text}")
+    path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
+
+
 def assemble(story, scenes, clips, voice_files, music, outdir, total,
              music_vol=MUSIC_VOL):
     ff = get_ffmpeg()
@@ -991,6 +1010,7 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
 
     # voices: per-line loudnorm, fit-to-scene atempo, timed delays
     chains, mix_ins, idx = [], [], n
+    captions = []
     for si, scene in enumerate(scenes, 1):
         start = boundaries[si - 1] + LINE_OFFSET
         files = voice_files[si - 1]
@@ -1014,6 +1034,8 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
             chains.append(chain)
             mix_ins.append(f"[vo{idx}]")
             eff = min(MAX_TEMPO, factor) if factor > 1.0 else 1.0
+            line_dict = scene.get("lines", [])[li] if li < len(scene.get("lines", [])) else {"text": "", "speaker": "narrator"}
+            captions.append((t, t + dur / eff, line_dict))
             t += dur / eff + LINE_GAP
             idx += 1
 
@@ -1063,6 +1085,9 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
             capture=True)
     mx = re.search(r"max_volume: ([-\d.]+)", v.stderr)
     print(f"  mix peak {mx.group(1)} dB (target <= -1.0)" if mx else "  mix checked")
+    srt = out.with_suffix(".srt")
+    write_srt(srt, captions)
+    print(f"  captions: {srt.name}")
     return out
 
 
