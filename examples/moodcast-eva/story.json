@@ -1,0 +1,48 @@
+{
+  "title": "MoodCast Eva: Weather-Triggered Ads",
+  "style": "3D animated cartoon film, Pixar style",
+  "aspect_ratio": "16:9",
+  "video_resolution": "720p",
+  "backends": {"image": "kie", "video": "kie", "voice": "elevenlabs", "music": "kie"},
+  "characters": [
+    {
+      "name": "Eva",
+      "photo": "eva_photo.png",
+      "design": "friendly young woman with long wavy brown hair and a warm confident smile, wearing a grey t-shirt with the 'MoodCast' logo across the chest and blue jeans",
+      "voice": "friendly upbeat young woman marketing presenter voice, warm and energetic",
+      "voice_id": "tnSpp4vdxKPjI9w0GnoV"
+    }
+  ],
+  "scenes": [
+    {
+      "description": "Eva stands on a bright sunny city street with golden sunlight, gesturing toward a glowing digital billboard beside her that shows a colorful ice cream advertisement",
+      "characters": ["Eva"],
+      "motion": "gentle camera push-in, Eva gestures toward the glowing billboard, sunlight flares softly",
+      "duration": 7,
+      "lines": [
+        {"speaker": "Eva", "text": "Sun's out? MoodCast just switched every ad to ice cream."},
+        {"speaker": "narrator", "voice": "warm confident male narrator voice, marketing tone", "voice_id": "c6SfcYrb2t09NHXiT80T", "text": "Weather-triggered ads, live."}
+      ]
+    },
+    {
+      "description": "Eva stands on a rainy city street holding a red umbrella, wearing a bright yellow raincoat with the hood down, rain falling around her, a digital billboard behind her shows a steaming coffee advertisement, puddle reflections on the pavement",
+      "characters": ["Eva"],
+      "motion": "rain falling steadily, Eva tilts her umbrella and smiles, camera slowly orbits",
+      "duration": 6,
+      "lines": [
+        {"speaker": "Eva", "text": "Forecast says rain? Your ads say hot coffee."}
+      ]
+    },
+    {
+      "description": "Eva in a cozy winter street scene with snow falling gently, wearing a warm red quilted winter coat and a soft cream knitted scarf, warm shop lights glowing, a digital billboard shows a colorful winter jacket sale advertisement",
+      "characters": ["Eva"],
+      "motion": "snowflakes drifting down, Eva points at the billboard with a delighted closed-mouth smile, warm light glow",
+      "ambience": "Sound: hushed winter silence - only a soft breeze and the quiet muffled hush of falling snow, nothing else",
+      "duration": 6,
+      "lines": [
+        {"speaker": "Eva", "text": "Snow in the forecast, parkas in the ads. That's MoodCast."}
+      ]
+    }
+  ],
+  "music_prompt": "upbeat modern marketing music, light electronic pop with acoustic guitar, friendly and optimistic, no vocals"
+}
