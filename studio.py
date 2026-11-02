@@ -968,7 +968,12 @@ def slug(title):
 
 
 def write_srt(path, captions):
-    """captions: list of (start_sec, end_sec, line_dict) -> SRT sidecar."""
+    """captions: list of (start_sec, end_sec, line_dict, label) -> SRT sidecar.
+
+    label=True prefixes the speaker name - only set when the line's scene has
+    two or more distinct character voices, where "who says it" is real
+    information. Single-voice scenes and narration stay clean.
+    """
 
     def ts(sec):
         ms = int(round(sec * 1000))
@@ -978,9 +983,9 @@ def write_srt(path, captions):
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
     blocks = []
-    for i, (start, end, line) in enumerate(captions, 1):
+    for i, (start, end, line, label) in enumerate(captions, 1):
         text = line["text"]
-        if line.get("speaker", "narrator") != "narrator":
+        if label and line.get("speaker", "narrator") != "narrator":
             text = f"{line['speaker']}: {text}"
         blocks.append(f"{i}\n{ts(start)} --> {ts(end)}\n{text}")
     path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
@@ -1036,6 +1041,12 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
         if factor > MAX_TEMPO:
             print(f"  warning: scene {si} speech needs {need:.1f}s, has {avail:.1f}s "
                   f"(clip it in the story.json)")
+        # caption speaker-labels only carry information when 2+ character
+        # voices alternate in this scene (narration never gets a label)
+        chars_in_scene = {ln.get("speaker", "narrator")
+                          for ln in scene.get("lines", [])
+                          if ln.get("speaker", "narrator") != "narrator"}
+        label = len(chars_in_scene) > 1
         t = start
         for li, (raw_trm, dur) in enumerate(zip(files, durs)):
             line, trm = raw_trm
@@ -1049,7 +1060,7 @@ def assemble(story, scenes, clips, voice_files, music, outdir, total,
             mix_ins.append(f"[vo{idx}]")
             eff = min(MAX_TEMPO, factor) if factor > 1.0 else 1.0
             line_dict = scene.get("lines", [])[li] if li < len(scene.get("lines", [])) else {"text": "", "speaker": "narrator"}
-            captions.append((t, t + dur / eff, line_dict))
+            captions.append((t, t + dur / eff, line_dict, label))
             t += dur / eff + LINE_GAP
             idx += 1
 
